@@ -52,11 +52,11 @@ resource "aws_iam_role_policy_attachment" "attach_rds_policy" {
 #creates lambda and attach iam role to lambda? 
 #this is here but will change depending on how lambda 3 set up
 
-resource "aws_lambda_function" "insert_lambda_name" {
-  function_name = "insert_function_name"
-  role          = aws_iam_role.rds_access_role.arn
-  handler       = "index.handler"
-  runtime       = "python3.8"
+# resource "aws_lambda_function" "insert_lambda_name" {
+#   function_name = "insert_function_name"
+#   role          = aws_iam_role.rds_access_role.arn
+#   handler       = "index.handler"
+#   runtime       = "python3.8"
 
-  filename      = "lambda_function.zip"
-}
+#   filename      = "lambda_function.zip"
+# }

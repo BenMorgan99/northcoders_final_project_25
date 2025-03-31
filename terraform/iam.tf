@@ -227,19 +227,16 @@ data "aws_iam_policy_document" "iam_step_function_execution_doc" {
 }
 
 resource "aws_iam_policy" "step_function_lambda_invoke" {
-  name = "StepFunctionLambdaInvokePolicy" 
-  description = "Allows Step Function to invoke Lambda" 
-  policy = jsonencode({ 
-    {
-	"Version": "2012-10-17",
-	"Statement": [
-		{
-			"Effect": "Allow",
-			"Action": "lambda:InvokeFunction",
-			"Resource": "arn:aws:lambda:eu-west-2:122610499526:function:create_tables_pandas_and_dim-function"
-		}]
-  }
-  }) 
+  policy = jsonencode({
+    "Version" : "2012-10-17",
+    "Statement" : [
+      {
+        "Effect" : "Allow",
+        "Action" : "lambda:InvokeFunction",
+        "Resource" : "arn:aws:lambda:eu-west-2:122610499526:function:create_tables_pandas_and_dim-function"
+      }
+    ]
+  })
 }
 
 

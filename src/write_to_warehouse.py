@@ -7,8 +7,10 @@ import pandas as pd
 import re
 from datetime import datetime
 import io
+import json
 from pprint import pprint
 from contextlib import closing
+from utils.get_bucket import get_bucket_name
 
 """
 This function should read from the s3 processed bucket then send the data to the data warehouse.
@@ -31,6 +33,8 @@ table_names = ["fact_sales_order", "dim_staff", "dim_date", "dim_counterparty", 
 
 def read_from_s3_processed_bucket(s3_client=None):
 
+    bucket_name = get_bucket_name("processed")
+
     if not s3_client:
         s3_client = boto3.client("s3")
 
@@ -39,8 +43,9 @@ def read_from_s3_processed_bucket(s3_client=None):
     for table in table_names:
         file_dates_list = []
 
-        objects = s3_client.list_objects_v2(Bucket="processed-bucket20250303162226216400000005", Prefix=f"{table}/")
+        objects = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=f"{table}/")
         pprint(objects)
+        print( "<<<<< These are the objects")
 
         if "Contents" not in objects or not objects["Contents"]:
             print(f"No objects found for {table} in S3. Skipping...")
@@ -48,10 +53,12 @@ def read_from_s3_processed_bucket(s3_client=None):
 
         for object in objects["Contents"]:
             key = object["Key"]
+            print(key, "<<<<<< This is the key")
             filename_timestamp_format = "%Y-%m-%d_%H-%M-%S"
 
             try:
-                filename_timestamp_str = key.split(f"{table}_")[1].split(".parquet")[0] 
+                filename_timestamp_str = key.split(f"{table}/unknown_source_")[1].split(".parquet")[0] 
+                print(filename_timestamp_str, "<<<<<< This is the filename_timestamp_str")
                 timestamp = datetime.strptime(filename_timestamp_str, filename_timestamp_format)
                 file_dates_list.append((timestamp, key))
             except (IndexError, ValueError):
@@ -67,12 +74,14 @@ def read_from_s3_processed_bucket(s3_client=None):
 
         latest_file = file_dates_list[0][1]
         
-        latest_file_object = s3_client.get_object(Bucket="processed-bucket20250303162226216400000005", Key=latest_file)
+        latest_file_object = s3_client.get_object(Bucket=bucket_name, Key=latest_file)
 
         buffer = io.BytesIO(latest_file_object["Body"].read())
         dataframe = pd.read_parquet(buffer, engine="pyarrow")
         data_frames_dict[table] = dataframe
 
+    pprint(data_frames_dict)
+    print("<<<<<< These are the dataframe dictionaries")
     return data_frames_dict
 
 # connect to the (redshift?) warehouse, conn=
@@ -91,6 +100,7 @@ def write_to_warehouse(data_frames_dict):
                 cur.execute(query)
                 query_results = cur.fetchall()
                 print(query_results)
+                return {"statusCode": 200, "body": json.dumps("Data successfully written to warehouse")}
     except Exception as e:
         raise RuntimeError(f"Warehouse database operation failed: {e}")
     finally:
@@ -99,3 +109,7 @@ def write_to_warehouse(data_frames_dict):
 # Insert data into redshift via postgres query
 # upload to warehouse in defined intervals
 # must be adequately logged in cloudwatch
+
+if __name__ == "__main__":
+    retrieved_dicts = read_from_s3_processed_bucket()
+    write_to_warehouse(retrieved_dicts)
