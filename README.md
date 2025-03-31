@@ -15,6 +15,8 @@ This project aims to extract data from a tote bag store's database, transform it
 
 * GitHub Actions (CI/CD)
 
+* Pandas
+
   
 ### Automated Environment Setup
 The CI/CD pipeline automates environment configuration:
