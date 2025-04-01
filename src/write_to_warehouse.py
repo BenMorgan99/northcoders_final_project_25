@@ -1,5 +1,6 @@
 
 import psycopg2
+from psycopg2 import sql
 import sys
 import boto3
 import os
@@ -94,17 +95,33 @@ def write_to_warehouse(data_frames_dict):
         conn = psycopg2.connect(host=PG_HOST, port=PG_PORT, database=PG_DATABASE, user=PG_USER, password=PG_PASSWORD)
         cur = conn.cursor()
 
-        with closing(conn.cursor()) as cur:
-            for table_name in data_frames_dict.keys():
-                query = f"SELECT * FROM {table_name}" 
-                cur.execute(query)
-                query_results = cur.fetchall()
-                print(query_results)
-                return {"statusCode": 200, "body": json.dumps("Data successfully written to warehouse")}
-    except Exception as e:
-        raise RuntimeError(f"Warehouse database operation failed: {e}")
+        for table_name, df in data_frames_dict.items():
+            # creates table if not exists
+            try:
+                columns = ", ".join(df.columns)
+                placeholders = ", ".join(["%s"] * len(df.columns))
+                create_table_query = sql.SQL(
+                "CREATE TABLE IF NOT EXISTS {} ({})").format(
+                    sql.Identifier(table_name), sql.SQL(columns))
+                cur.execute(create_table_query)
+                for index, row in df.itterows():
+                    insert_query = sql.SQL(
+                    "INSERT INTO {} ({}) VALUES ({})").format(
+                                sql.Identifier(table_name), sql.SQL(columns), sql.SQL(placeholders))
+                    cur.execute(insert_query, tuple(row))
+                print(f"{table_name} successfully written to data warehouse")
+            except (Exception, psycopg2.DatabaseError) as table_error:
+                print(f"Error writing DataFrame '{table_name}': {table_error}")
+                raise
+            conn.close()
+            print("All tables processed")
+    except (Exception, psycopg2.DatabaseError) as e:
+        print(f"Overall database error: {e}")
+        raise
     finally:
-        if conn:
+        if cur is not None:
+            cur.close()
+        if conn is not None:
             conn.close()  
 # Insert data into redshift via postgres query
 # upload to warehouse in defined intervals

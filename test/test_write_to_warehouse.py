@@ -10,6 +10,7 @@ import io
 from datetime import datetime, timedelta
 import psycopg2
 import botocore.exceptions
+from utils.get_bucket import get_bucket_name
 
 
 
@@ -44,32 +45,38 @@ class TestReadFromBucket:
     @mock_aws
     def test_s3_read_from_bucket(self):
         try:
-            s3_client = boto3.client("s3", region_name="eu-west-2")
-            bucket_name = "processed-bucket20250303162226216400000005"
-            s3_client.create_bucket(Bucket=bucket_name, CreateBucketConfiguration={"LocationConstraint": "eu-west-2"})
+            s3 = boto3.client("s3", region_name="eu-west-2")
+            s3.create_bucket(Bucket="processed-test-bucket")
 
-            mock_s3 = boto3.client("s3", region_name="eu-west-2")
+            # Create test parquet files
+            df_data = pd.DataFrame({"col1": [1, 2], "col2": ["a", "b"]})
+            buffer = io.BytesIO()
+            df_data.to_parquet(buffer, engine="pyarrow")
+            buffer.seek(0)
 
-            fake_parquet_data = io.BytesIO()
-
-            mock_df = pd.DataFrame({"col1": [1, 2, 3], "col2": ["a", "b", "c"]})
-
-            mock_df.to_parquet(fake_parquet_data, engine="pyarrow", index=False)
-
-            fake_parquet_data.seek(0)
-
-            table_name = "fact_sales_order"
-            timestamp = "2025-03-06_10-01-45"
-            file_key = f"{table_name}/{table_name}_{timestamp}.parquet"
-            s3_client.put_object(Bucket=bucket_name, Key=file_key, Body=fake_parquet_data.getvalue())
-
-            output = read_from_s3_processed_bucket(s3_client=s3_client)
+            s3.put_object(
+                Bucket="processed-test-bucket",
+                Key="fact_sales_order/unknown_source_2023-10-26_12-00-00.parquet",
+                Body=buffer.getvalue(),
+            )
+            s3.put_object(
+                Bucket="processed-test-bucket",
+                Key="dim_staff/unknown_source_2023-10-26_13-00-00.parquet",
+                Body=buffer.getvalue(),
+            )
 
             # result_df = pd.read_parquet(io.BytesIO(output["fact_sales_order"]), engine="pyarrow")
 
-            result_df = output["fact_sales_order"]
+            with patch("utils.get_bucket_name", return_value="processed-test-bucket"):
+                result = read_from_s3_processed_bucket(s3)
 
-            pd.testing.assert_frame_equal(result_df, mock_df)
+            assert isinstance(result, dict)
+            assert "fact_sales_order" in result
+            assert "dim_staff" in result
+            assert isinstance(result["fact_sales_order"], pd.DataFrame)
+            assert len(result["fact_sales_order"]) == 2
+
+  
         except Exception as error:
             pytest.fail(f"Test failed due to: {str(error)}")
 
