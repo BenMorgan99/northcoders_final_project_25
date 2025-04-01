@@ -2,26 +2,18 @@ import pytest
 import pandas as pd
 import boto3
 from unittest.mock import patch, MagicMock
-from io import StringIO
+from io import BytesIO
 from moto import mock_aws
 from src.write_to_warehouse import read_from_s3_processed_bucket, write_to_warehouse
 import os
 import io
 from datetime import datetime, timedelta
 import psycopg2
+from psycopg2 import sql
+from psycopg2.sql import Identifier, SQL
 import botocore.exceptions
 from utils.get_bucket import get_bucket_name
 
-
-
-# @pytest.fixture
-# def mock_db_connection():
-#     with patch("psycopg2.connect") as mock_connect:
-#         mock_conn = MagicMock()
-#         mock_cur = MagicMock()
-#         mock_connect.return_value = mock_conn
-#         mock_connect.return_value = mock_cur
-#         yield mock_conn, mock_cur
 
 mock_data = {
     "fact_sales_order": pd.DataFrame({"col1": [1, 2, 3], "col2": ["a", "b", "c"]}),
@@ -46,7 +38,7 @@ class TestReadFromBucket:
     def test_s3_read_from_bucket(self):
         try:
             s3 = boto3.client("s3", region_name="eu-west-2")
-            s3.create_bucket(Bucket="processed-test-bucket")
+            s3.create_bucket(Bucket="processed-test-bucket", CreateBucketConfiguration={"LocationConstraint": "eu-west-2"})
 
             # Create test parquet files
             df_data = pd.DataFrame({"col1": [1, 2], "col2": ["a", "b"]})
@@ -67,7 +59,7 @@ class TestReadFromBucket:
 
             # result_df = pd.read_parquet(io.BytesIO(output["fact_sales_order"]), engine="pyarrow")
 
-            with patch("utils.get_bucket_name", return_value="processed-test-bucket"):
+            with patch("utils.get_bucket", return_value="processed-test-bucket"):
                 result = read_from_s3_processed_bucket(s3)
 
             assert isinstance(result, dict)
@@ -101,43 +93,35 @@ class TestReadFromBucket:
     # test 3 - function reads and extracts most recent file
     @mock_aws
     def test_function_extracts_most_recent_file(self):
-        try:
-            s3_client = boto3.client("s3", region_name="eu-west-2")
-            bucket_name = "processed-bucket20250303162226216400000005"
-            s3_client.create_bucket(Bucket=bucket_name, CreateBucketConfiguration={"LocationConstraint": "eu-west-2"})
+        s3_client = boto3.client("s3", region_name="eu-west-2")
+        bucket_name = "processed-bucket20250303162226216400000005"
+        s3_client.create_bucket(Bucket=bucket_name, CreateBucketConfiguration={"LocationConstraint": "eu-west-2"})
 
-            table_name = "fact_sales_order"
-            
-            # Create two timestamps, one older and one newer
-            old_timestamp = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d_%H-%M-%S")
-            new_timestamp = datetime.utcnow().strftime("%Y-%m-%d_%H-%M-%S")
+        table_name = "fact_sales_order"
+        old_timestamp = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d_%H-%M-%S")
+        new_timestamp = datetime.utcnow().strftime("%Y-%m-%d_%H-%M-%S")
 
-            old_file_key = f"{table_name}/{table_name}_{old_timestamp}.parquet"
-            new_file_key = f"{table_name}/{table_name}_{new_timestamp}.parquet"
+        old_file_key = f"{table_name}/unknown_source_{old_timestamp}.parquet"
+        new_file_key = f"{table_name}/unknown_source_{new_timestamp}.parquet"
 
-            # Create fake Parquet data
-            mock_df_old = pd.DataFrame({"col1": [1, 2, 3], "col2": ["x", "y", "z"]})
-            mock_df_new = pd.DataFrame({"col1": [4, 5, 6], "col2": ["a", "b", "c"]})
+        mock_df_old = pd.DataFrame({"col1": [1, 2, 3], "col2": ["x", "y", "z"]})
+        mock_df_new = pd.DataFrame({"col1": [4, 5, 6], "col2": ["a", "b", "c"]})
 
-            fake_parquet_old = io.BytesIO()
-            fake_parquet_new = io.BytesIO()
-            mock_df_old.to_parquet(fake_parquet_old, engine="pyarrow", index=False)
-            mock_df_new.to_parquet(fake_parquet_new, engine="pyarrow", index=False)
-            
-            fake_parquet_old.seek(0)
-            fake_parquet_new.seek(0)
+        fake_parquet_old = BytesIO()
+        fake_parquet_new = BytesIO()
+        mock_df_old.to_parquet(fake_parquet_old, engine="pyarrow", index=False)
+        mock_df_new.to_parquet(fake_parquet_new, engine="pyarrow", index=False)
 
-            # Upload both files to mock bucket
-            s3_client.put_object(Bucket=bucket_name, Key=old_file_key, Body=fake_parquet_old.getvalue())
-            s3_client.put_object(Bucket=bucket_name, Key=new_file_key, Body=fake_parquet_new.getvalue())
+        fake_parquet_old.seek(0)
+        fake_parquet_new.seek(0)
 
+        s3_client.put_object(Bucket=bucket_name, Key=old_file_key, Body=fake_parquet_old.getvalue())
+        s3_client.put_object(Bucket=bucket_name, Key=new_file_key, Body=fake_parquet_new.getvalue())
+
+        with patch("utils.get_bucket", return_value=bucket_name):
             output = read_from_s3_processed_bucket(s3_client=s3_client)
 
-            # Checks if the latest file was selected
-            result_df = output["fact_sales_order"]
-            pd.testing.assert_frame_equal(result_df, mock_df_new)
-        except Exception as error:
-            pytest.fail(f"Test failed due to: {str(error)}")
+        pd.testing.assert_frame_equal(output["fact_sales_order"], mock_df_new)
 
     # test 4 - function attempts to read a corrupted parquet
     @mock_aws
@@ -148,17 +132,13 @@ class TestReadFromBucket:
 
         table_name = "fact_sales_order"
         timestamp = "2025-03-06_10-01-45"
-        file_key = f"{table_name}/{table_name}_{timestamp}.parquet"
+        file_key = f"{table_name}/unknown_source_{timestamp}.parquet"
 
-        # Upload a corrupted "Parquet" file (invalid binary data)
         s3_client.put_object(Bucket=bucket_name, Key=file_key, Body=b"this is not a parquet file")
 
-        # Call the function and expect False for try and exception raised
-        try:
-            read_from_s3_processed_bucket(s3_client=s3_client)
-            assert False, "Expected an exception for a corrupt Parquet file"
-        except Exception as e:
-            assert "Parquet magic bytes not found" in str(e), f"Unexpected exception: {e}"
+        with patch("utils.get_bucket", return_value=bucket_name):
+            with pytest.raises(Exception, match="Parquet magic bytes not found"):
+                read_from_s3_processed_bucket(s3_client=s3_client)
 
 
     # test 5 - function attempts to read all tables even if some aren't available
@@ -168,159 +148,104 @@ class TestReadFromBucket:
         bucket_name = "processed-bucket20250303162226216400000005"
         try:
             s3_client.create_bucket(
-            Bucket=bucket_name,
-            CreateBucketConfiguration={"LocationConstraint": "eu-west-2"},
-        )
+                Bucket=bucket_name,
+                CreateBucketConfiguration={"LocationConstraint": "eu-west-2"},
+            )
         except botocore.exceptions.ClientError as e:
-            error_code = e.response["Error"]["Code"]
-            if error_code != "BucketAlreadyOwnedByYou":
-                raise  # Re-raise if it's an unexpected error
+            if e.response["Error"]["Code"] != "BucketAlreadyOwnedByYou":
+                raise
 
-        # Only uploading a file for fact_sales_order (missing other tables)
         table_name = "fact_sales_order"
         timestamp = "2025-03-06_10-01-45"
-        file_key = f"{table_name}/{table_name}_{timestamp}.parquet"
+        file_key = f"{table_name}/unknown_source_{timestamp}.parquet"
 
         mock_df = pd.DataFrame({"col1": [1, 2, 3], "col2": ["a", "b", "c"]})
-        fake_parquet = io.BytesIO()
+        fake_parquet = BytesIO()
         mock_df.to_parquet(fake_parquet, engine="pyarrow", index=False)
         fake_parquet.seek(0)
 
         s3_client.put_object(Bucket=bucket_name, Key=file_key, Body=fake_parquet.getvalue())
 
-        output = read_from_s3_processed_bucket(s3_client=s3_client)
+        with patch("utils.get_bucket", return_value=bucket_name):
+            output = read_from_s3_processed_bucket(s3_client=s3_client)
 
-        # Ensure fact_sales_order is in the output
-        assert "fact_sales_order" in output, "Expected 'fact_sales_order' in output"
+        assert "fact_sales_order" in output
         pd.testing.assert_frame_equal(output["fact_sales_order"], mock_df)
-
-        # Ensure other tables are missing
         for table in ["dim_staff", "dim_date", "dim_counterparty", "dim_location"]:
-            assert table not in output, f"Expected '{table}' to be missing from output"
+            assert table not in output
 
 
 class TestWriteToWarehouse:
 
     @patch("psycopg2.connect")
-    # test data schema is successfully written to warehouse tds
-    def test_write_to_warehouse_success(self, mock_connect, mock_db_connection):
-        # Arrange: Set up the mock cursor and connection
-        try:
-            mock_conn, mock_cur = mock_db_connection
-            mock_connect.return_value = mock_conn
+    @patch("psycopg2.sql.SQL") # Patch the SQL constructor
+    def test_write_to_warehouse_success(self, mock_sql_constructor, mock_connect):
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_connect.return_value = mock_conn
+        mock_conn.cursor.return_value = mock_cur
 
-            # Simulate what should happen during the database interaction
-            mock_cur.fetchall.return_value = [(1, "a"), (2, "b"), (3, "c")]
+        def as_string_side_effect(conn=None):
+            return "mocked_sql_string" # return a string.
 
-            mock_data = {"table1": None, "table2": None} 
+        mock_sql = MagicMock()
+        mock_sql.as_string.side_effect = as_string_side_effect
+        mock_sql_constructor.return_value = mock_sql # force the constructor to return our mock.
 
-            # Act: Call the function with the mock data
+        mock_data = {
+            "table1": pd.DataFrame({"col1": [1, 2], "col2": ["a", "b"]}),
+            "table2": pd.DataFrame({"col3": [3, 4], "col4": ["c", "d"]}),
+        }
+        write_to_warehouse(mock_data)
+
+        # Calculate the expected number of execute calls (create table + inserts)
+        expected_execute_calls = 6 # 2 tables, create table + 2 rows each
+        assert mock_cur.execute.call_count == expected_execute_calls
+
+        # Check commit and close calls
+        mock_conn.commit.assert_called_with()
+        assert mock_conn.commit.call_count == 2
+        mock_cur.close.assert_called_once()
+        mock_conn.close.assert_called_once()
+
+    @patch("psycopg2.connect")
+    @patch("psycopg2.sql.SQL")  # Patch the SQL constructor
+    def test_write_to_warehouse_failure(self, mock_sql_constructor, mock_connect):
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_connect.return_value = mock_conn
+
+        # Mock the SQL object and its as_string method
+        mock_sql = MagicMock()
+
+        def as_string_side_effect(conn=None):
+            return "mocked_sql_string"  # Return a string
+
+        mock_sql.as_string.side_effect = as_string_side_effect
+        mock_sql_constructor.return_value = mock_sql  # Force the constructor to return our mock
+
+        # Raise the error when cursor.execute is called
+        mock_cur.execute.side_effect = psycopg2.OperationalError("Connection failed")
+        mock_conn.cursor.return_value = mock_cur
+
+        mock_data = {"table1": pd.DataFrame({"col1": [1], "col2": ["a"]})}
+
+        with pytest.raises(psycopg2.OperationalError, match="Connection failed"):
             write_to_warehouse(mock_data)
 
-            # Assert: Check that the cursor's execute method was called with the correct SQL query
-            for table_name in mock_data:
-                mock_cur.execute.assert_any_call(f"SELECT * FROM {table_name}")
-
-            # Assert: Verify that fetchall was called after execute (to fetch results)
-            mock_cur.fetchall.assert_called()
-
-            # Assert: Verify that the connection and cursor were closed properly
-            mock_cur.close.assert_called()
-            mock_conn.close.assert_called()
-        except Exception as error:
-            pytest.fail(f"Test failed due to: {str(error)}")
+        mock_cur.close.assert_called_once()
+        mock_conn.close.assert_called_once()
 
     @patch("psycopg2.connect")
-    def test_write_to_warehouse_failure(self, mock_connect):
-        try:
-            mock_connect.side_effect = psycopg2.OperationalError("Connection failed")
+    def test_write_to_warehouse_empty_data(self, mock_connect):
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_connect.return_value = mock_conn
+        mock_conn.cursor.return_value = mock_cur
 
-            with pytest.raises(RuntimeError, match="Warehouse database operation failed: Connection failed"):
-                write_to_warehouse({"table1": None})
-        except Exception as error:
-            pytest.fail(f"Test failed due to: {str(error)}")
+        write_to_warehouse({})
 
-    @patch("psycopg2.connect")
-    def test_write_to_warehouse_empty_data(self, mock_connect, mock_db_connection):
-        try:
-            mock_conn, mock_cur = mock_db_connection
-            mock_connect.return_value = mock_conn
-
-            write_to_warehouse({})
-
-            mock_cur.execute.assert_not_called()
-            mock_cur.close.assert_called()
-            mock_conn.close.assert_called()
-        except Exception as error:
-            pytest.fail(f"Test failed due to: {str(error)}")
-
-            # mock_boto_client.return_value = mock_s3
-
-            # mock_s3.create_bucket(Bucket="test-bucket", CreateBucketConfiguration={"LocationConstraint": "eu-west-2"})
-
-            # mock_s3.put_object(Bucket="test-bucket", Key="folder/Hello_world.txt", Body="Hello world")
-
-            # response = mock_s3.list_objects_v2(Bucket="test-bucket", Prefix="folder/")
-
-            # mock_s3.get_object(Bucket="test-bucket", Key="folder/Hello_world.txt")
-
-            # print(response)
-
-
-        # mock_s3.get_object.return_value = {"Body": fake_parquet_data}
-
-        # output = read_from_s3_processed_bucket(s3_client=mock_s3)
-
-        # result_df = pd.read_parquet(io.BytesIO(output["fact_sales_order"]), engine="pyarrow")
-
-        # pd.testing.assert_frame_equal(result_df, mock_df)
-
-
-
-        # print(response)
-
-        # mock_s3.list_objects_v2.return_value = {
-        # "Contents": [{"Key": "fact_sales_order_2025-03-06_10-01-45.parquet"}]
-        # }
-
-        # fake_parquet_data = io.BytesIO()
-
-
-
-        # output = read_from_s3_processed_bucket(s3_client=mock_s3)
-
-        # result_df = pd.read_parquet(io.BytesIO(output["fact_sales_order"]), engine="pyarrow")
-
-        # pd.testing.assert_frame_equal(result_df, mock_df)
-
-        # self.assertIn("fact_sales_order", result_df)
-
-        # self.assertIsInstance(result_df["fact_sales_order"], pd.DataFrame)
-
-
-
-
-
-    # mock_s3 = MagicMock()
-    
-    # mock_boto_client.return_value = mock_s3
-    
-    # mock_s3.list_objects_v2.return_value = {"Contents": [{"Key": "fact_sales_order_2025-03-06_10-01-45.parquet"}]}
-
-    # mock_df = pd.DataFrame({"column1": [1, 2, 3]})
-
-    # mock_s3.get_object.return_value = {"Body": io.BytesIO(b"dogandcat")} 
-    
-    # output = read_from_s3_processed_bucket()
-    
-    # assert output["fact_sales_order"] == b"dogandcat"
-
-    # mock_s3 = MagicMock()
-
-
-
-
-
-# test 2 - retrieving data from s3 processed bucket
-# test 3 - data successfully populated to warehouse
-# test 4 - failure exceptions are captured and printed
+        mock_cur.execute.assert_not_called()
+        mock_conn.commit.assert_not_called()
+        mock_cur.close.assert_called_once()
+        mock_conn.close.assert_called_once()

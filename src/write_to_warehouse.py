@@ -68,10 +68,11 @@ def read_from_s3_processed_bucket(s3_client=None):
 
         if not file_dates_list:
             print(f"No valid files found for {table}. Skipping...")
+            continue
 
         file_dates_list.sort(key=lambda tup: tup[0], reverse=True)
 
-        print(file_dates_list)
+        print(file_dates_list, "<<<<< This is the file_dates_list")
 
         latest_file = file_dates_list[0][1]
         
@@ -90,6 +91,7 @@ def read_from_s3_processed_bucket(s3_client=None):
 def write_to_warehouse(data_frames_dict):
 
     conn = None 
+    cur = None
 # convert from parquet back to schema
     try:
         conn = psycopg2.connect(host=PG_HOST, port=PG_PORT, database=PG_DATABASE, user=PG_USER, password=PG_PASSWORD)
@@ -103,26 +105,32 @@ def write_to_warehouse(data_frames_dict):
                 create_table_query = sql.SQL(
                 "CREATE TABLE IF NOT EXISTS {} ({})").format(
                     sql.Identifier(table_name), sql.SQL(columns))
-                cur.execute(create_table_query)
-                for index, row in df.itterows():
+                cur.execute(create_table_query.as_string(conn))
+                for index, row in df.iterrows():
                     insert_query = sql.SQL(
                     "INSERT INTO {} ({}) VALUES ({})").format(
                                 sql.Identifier(table_name), sql.SQL(columns), sql.SQL(placeholders))
-                    cur.execute(insert_query, tuple(row))
+                    cur.execute(insert_query.as_string(conn), tuple(row))
                 print(f"{table_name} successfully written to data warehouse")
+                conn.commit()
             except (Exception, psycopg2.DatabaseError) as table_error:
                 print(f"Error writing DataFrame '{table_name}': {table_error}")
                 raise
-            conn.close()
             print("All tables processed")
     except (Exception, psycopg2.DatabaseError) as e:
         print(f"Overall database error: {e}")
         raise
     finally:
-        if cur is not None:
-            cur.close()
-        if conn is not None:
-            conn.close()  
+        try:
+            if cur is not None:
+                cur.close()
+        except Exception:
+            pass # if cur.close fails, continue.
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass # if conn.close fails, continue. 
 # Insert data into redshift via postgres query
 # upload to warehouse in defined intervals
 # must be adequately logged in cloudwatch
