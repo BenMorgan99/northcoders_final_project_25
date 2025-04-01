@@ -135,6 +135,23 @@ def write_to_warehouse(data_frames_dict):
 # upload to warehouse in defined intervals
 # must be adequately logged in cloudwatch
 
+def lambda_handler(event, context):
+    """Lambda handler that orchestrates reading from S3 and writing to the warehouse."""
+    try:
+        data_frames = read_from_s3_processed_bucket()
+        write_to_warehouse(data_frames)
+
+        return {
+            'statusCode': 200,
+            'body': json.dumps({'message': 'Data successfully processed and written to warehouse.'})
+        }
+
+    except Exception as e:
+        return {
+            'statusCode': 500,
+            'body': json.dumps({'message': f'Error processing data: {str(e)}'})
+        }
+
 if __name__ == "__main__":
     retrieved_dicts = read_from_s3_processed_bucket()
     write_to_warehouse(retrieved_dicts)
