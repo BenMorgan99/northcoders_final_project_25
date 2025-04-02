@@ -5,4 +5,8 @@
 /python_zips
 **/__pycache__
 __pycache__/
+*.pyc
+*.egg-info/
+*/layers/
+
 
