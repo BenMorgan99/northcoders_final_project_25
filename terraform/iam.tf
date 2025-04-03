@@ -270,3 +270,39 @@ resource "aws_iam_role_policy_attachment" "step_function_lambda_invoke_attachmen
   role       = aws_iam_role.step_function_execution_role.name
   policy_arn = aws_iam_policy.iam_step_function_policy.arn
 }
+
+# adding relevant permissions for ecr data
+
+data "aws_iam_policy_document" "lambda_ecr_pull_policy_doc" {
+  statement {
+    actions = [
+      "ecr:GetDownloadUrlForLayer",
+      "ecr:BatchGetImage",
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:GetAuthorizationToken",
+      "ecr:InitiateLayerUpload",
+      "ecr:PutImage",
+      "ecr:UploadLayerPart"
+    ]
+    resources = [
+      aws_ecr_repository.lambda_image.arn,
+      "arn:aws:ecr:eu-west-2:122610499526:repository/${aws_ecr_repository.lambda_image.name}/*"
+    ]
+  }
+}
+# creates resource policy that allows Lambda 2 and 3 to read from ecr
+resource "aws_iam_policy" "lambda_ecr_pull_policy" {
+  name   = "lambda_ecr_pull_policy"
+  path   = "/"
+  policy = data.aws_iam_policy_document.lambda_ecr_pull_policy_doc.json
+}
+# attaches the relevant policies to the Lambda roles
+resource "aws_iam_role_policy_attachment" "lambda_2_ecr_pull_attachment" {
+  role       = aws_iam_role.lambda_2_role.name
+  policy_arn = aws_iam_policy.lambda_ecr_pull_policy.arn
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_3_ecr_pull_attachment" {
+  role       = aws_iam_role.lambda_3_role.name
+  policy_arn = aws_iam_policy.lambda_ecr_pull_policy.arn
+}
