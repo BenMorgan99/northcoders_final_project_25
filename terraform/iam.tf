@@ -218,10 +218,12 @@ data "aws_iam_policy_document" "iam_step_function_execution_doc" {
       "cloudwatch:DescribeLogGroups",
       "logs:PutLogEvents"
     ]
-    resources = [
-      "${aws_lambda_function.lambda_read_from_ingestion_bucket.arn}",
-      "${aws_cloudwatch_log_group.step_function_logs.arn}",
-      "${aws_lambda_function.lambda_create_tables_pandas_and_dim.arn}"
+  resources = [
+      aws_lambda_function.lambda_read_from_ingestion_bucket.arn,
+      aws_lambda_function.lambda_create_tables_pandas_and_dim.arn,
+      aws_lambda_function.lambda_processed_bucket_to_warehouse.arn,
+      aws_cloudwatch_log_group.step_function_logs.arn,
+      "arn:aws:logs:eu-west-2:122610499526:log-group:/aws/states/lambda-2-state_machine:*" # Adjust log group ARN if different
     ]
   }
 }
